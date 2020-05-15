@@ -225,7 +225,7 @@ function Base.show(io::IOContext, S::AbstractSparseMatrixCSC)
     end
 
     rows = displaysize(io)[1] - 4 # -4 from [Prompt, header, newline after elements, new prompt]
-    if !get(io, :limit, false) || rows >= nnz(S) # Will the whole matrix fit when printed?
+    if !(get(io, :limit, false)::Bool) || rows >= nnz(S) # Will the whole matrix fit when printed?
         cols = _get_cols(1, nnz(S))
         padr, padc = ndigits.((maximum(rowvals(S)[1:nnz(S)]), cols[end]))
         _format_line.(1:nnz(S), cols, padr, padc)
