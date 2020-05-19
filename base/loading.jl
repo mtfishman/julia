@@ -126,6 +126,8 @@ function dummy_uuid(project_file::String)
     return uuid5(ns_dummy_uuid, project_path)
 end
 
+use_toml = false
+
 ## package path slugs: turning UUID + SHA1 into a pair of 4-byte "slugs" ##
 
 const slug_chars = String(['A':'Z'; 'a':'z'; '0':'9'])
@@ -302,6 +304,18 @@ end
 const project_names = ("JuliaProject.toml", "Project.toml")
 const manifest_names = ("JuliaManifest.toml", "Manifest.toml")
 
+struct TOMLCache
+    p::TOML.Parser
+    d::Dict{String, Dict{String, Any}}
+end
+
+function parsed_toml(tc::TOMLCache, project_file::String)
+    get!(tc, project_file) do
+        p = Parser!(tc.p, project_file)
+        parsefile(project_file)
+    end
+end
+
 # classify the LOAD_PATH entry to be one of:
 #  - `false`: nonexistant / nothing to see here
 #  - `true`: `env` is an implicit environment
@@ -350,13 +364,13 @@ function manifest_deps_get(env::String, where::PkgId, name::String)::Union{Nothi
     return nothing
 end
 
-function manifest_uuid_path(env::String, pkg::PkgId)::Union{Nothing,String}
+function manifest_uuid_path(tc::TOMLCache, env::String, pkg::PkgId)::Union{Nothing,String}
     project_file = env_project_file(env)
     if project_file isa String
         proj = project_file_name_uuid(project_file, pkg.name)
         if proj == pkg
             # if `pkg` matches the project, return the project itself
-            return project_file_path(project_file, pkg.name)
+            return project_file_path(tc, project_file, pkg.name)
         end
         # look for manifest file and `where` stanza
         return explicit_manifest_uuid_path(project_file, pkg)
@@ -399,17 +413,22 @@ function project_file_name_uuid(project_file::String, name::String)::PkgId
     return pkg
 end
 
-function project_file_path(project_file::String, name::String)::String
-    path = open(project_file) do io
-        for line in eachline(io)
-            occursin(re_section, line) && break
-            if (m = match(re_path_to_string, line)) !== nothing
-                return String(m.captures[1])
+function project_file_path(tc::TOMLCache, project_file::String, name::String)::String
+    if use_toml
+        d = parsed_toml(project_file)
+        return get(d, "uuid", "")
+    else
+        path = open(project_file) do io
+            for line in eachline(io)
+                occursin(re_section, line) && break
+                if (m = match(re_path_to_string, line)) !== nothing
+                    return String(m.captures[1])
+                end
             end
+            return ""
         end
-        return ""
+        return joinpath(dirname(project_file), path)
     end
-    return joinpath(dirname(project_file), path)
 end
 
 
