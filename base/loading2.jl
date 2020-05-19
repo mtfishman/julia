@@ -1,3 +1,10 @@
+module Loading2
+
+import Base
+using Base: WrappedException
+using UUIDs
+
+include("/home/kc/JuliaPkgs/TOMLX/src/TOMLX.jl")
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 # Base.require is the implementation for the `import` statement
@@ -92,13 +99,13 @@ struct SHA1
 end
 SHA1(s::AbstractString) = SHA1(hex2bytes(s))
 
-string(hash::SHA1) = bytes2hex(hash.bytes)
-print(io::IO, hash::SHA1) = bytes2hex(io, hash.bytes)
-show(io::IO, hash::SHA1) = print(io, "SHA1(\"", hash, "\")")
+Base.string(hash::SHA1) = bytes2hex(hash.bytes)
+Base.print(io::IO, hash::SHA1) = bytes2hex(io, hash.bytes)
+Base.show(io::IO, hash::SHA1) = print(io, "SHA1(\"", hash, "\")")
 
-isless(a::SHA1, b::SHA1) = isless(a.bytes, b.bytes)
-hash(a::SHA1, h::UInt) = hash((SHA1, a.bytes), h)
-==(a::SHA1, b::SHA1) = a.bytes == b.bytes
+Base.isless(a::SHA1, b::SHA1) = isless(a.bytes, b.bytes)
+Base.hash(a::SHA1, h::UInt) = hash((SHA1, a.bytes), h)
+Base.:(==)(a::SHA1, b::SHA1) = a.bytes == b.bytes
 
 # fake uuid5 function (for self-assigned UUIDs)
 # TODO: delete and use real uuid5 once it's in stdlib
@@ -146,8 +153,8 @@ function package_slug(uuid::UUID, p::Int=5)
 end
 
 function version_slug(uuid::UUID, sha1::SHA1, p::Int=5)
-    crc = _crc32c(uuid)
-    crc = _crc32c(sha1.bytes, crc)
+    crc = Base._crc32c(uuid)
+    crc = Base._crc32c(sha1.bytes, crc)
     return slug(crc, p)
 end
 
@@ -173,9 +180,9 @@ function PkgId(m::Module, name::String = String(nameof(moduleroot(m))))
     UInt128(uuid) == 0 ? PkgId(name) : PkgId(uuid, name)
 end
 
-==(a::PkgId, b::PkgId) = a.uuid == b.uuid && a.name == b.name
+Base.:(==)(a::PkgId, b::PkgId) = a.uuid == b.uuid && a.name == b.name
 
-function hash(pkg::PkgId, h::UInt)
+function Base.hash(pkg::PkgId, h::UInt)
     h += 0xc9f248583a0ca36c % UInt
     h = hash(pkg.uuid, h)
     h = hash(pkg.name, h)
@@ -308,16 +315,18 @@ struct TOMLCache
     p::TOMLX.Internals.Parser
     d::Dict{String, Dict{String, Any}}
 end
-# Thread safety
+
 const TOML_CACHE = TOMLCache(TOMLX.Internals.Parser(), Dict{String, Dict{String, Any}}())
 
 parsed_toml(project_file::String) = parsed_toml(TOML_CACHE, project_file)
 function parsed_toml(tc::TOMLCache, project_file::String)
     get!(tc.d, project_file) do
+        @info "TOML parsing $project_file"
         TOMLX.Internals.reinitialize_from_file!(tc.p, project_file)
         TOMLX.parsefile(project_file)
     end
 end
+
 
 # classify the LOAD_PATH entry to be one of:
 #  - `false`: nonexistant / nothing to see here
@@ -373,7 +382,7 @@ function manifest_uuid_path(env::String, pkg::PkgId)::Union{Nothing,String}
         proj = project_file_name_uuid(project_file, pkg.name)
         if proj == pkg
             # if `pkg` matches the project, return the project itself
-            return project_file_path(project_file, pkg.name)
+            return project_file_path(tc, project_file, pkg.name)
         end
         # look for manifest file and `where` stanza
         return explicit_manifest_uuid_path(project_file, pkg)
@@ -402,11 +411,12 @@ const re_deps_to_any        = r"^\s*deps\s*=\s*(.*?)\s*(?:#|$)"
 # find project file's top-level UUID entry (or nothing)
 function project_file_name_uuid(project_file::String, name::String)::PkgId
     uuid = dummy_uuid(project_file)
+
     if use_toml
         d = parsed_toml(project_file)
         uuid = get(d, "uuid", uuid)
         name = get(d, "name", name)
-        return PkgId(UUID(uuid), name)
+        return PkgId(UUID(uuid2), name)
     else
         pkg = open(project_file) do io
             for line in eachline(io)
@@ -535,7 +545,7 @@ function explicit_project_deps_get(project_file::String, name::String)::Union{No
     if use_toml
         d = parsed_toml(project_file)
         if get(d, "name", nothing) == name
-            return UUID(get(d, "uuid", root_uuid))
+            return UUID(get(d, "uuid", dummy_uuid))
         elseif haskey(d, "deps")
             deps = d["deps"]
             uuid = get(deps, name, nothing)
@@ -655,12 +665,14 @@ end
 function explicit_manifest_uuid_path(project_file::String, pkg::PkgId)::Union{Nothing,String}
     manifest_file = project_file_manifest_path(project_file)
     manifest_file === nothing && return nothing # no manifest, skip env
+    @info "hello!"
 
     if use_toml
         d = parsed_toml(manifest_file)
         entries = get(d, pkg.name, nothing)
         entries === nothing && return nothing # TODO: allow name to mismatch?
         for entry in entries
+            @show entry
             if UUID(get(entry, "uuid", nothing)) === pkg.uuid
                 path = get(entry, "path", nothing)
                 if path !== nothing
@@ -996,7 +1008,6 @@ For more details regarding code loading, see the manual sections on [modules](@r
 [parallel computing](@ref code-availability).
 """
 function require(into::Module, mod::Symbol)
-    empty!(TOML_CACHE.d)
     uuidkey = identify_package(into, String(mod))
     # Core.println("require($(PkgId(into)), $mod) -> $uuidkey")
     if uuidkey === nothing
@@ -1065,9 +1076,9 @@ function register_root_module(m::Module)
     nothing
 end
 
-register_root_module(Core)
-register_root_module(Base)
-register_root_module(Main)
+#register_root_module(Core)
+#register_root_module(Base)
+#register_root_module(Main)
 
 # This is used as the current module when loading top-level modules.
 # It has the special behavior that modules evaluated in it get added
@@ -1143,7 +1154,7 @@ function _require(pkg::PkgId)
                 if isa(cachefile, Exception)
                     if precompilableerror(cachefile)
                         verbosity = isinteractive() ? CoreLogging.Info : CoreLogging.Debug
-                        @logmsg verbosity "Skipping precompilation since __precompile__(false). Importing $pkg."
+                        #@logmsg verbosity "Skipping precompilation since __precompile__(false). Importing $pkg."
                     else
                         @warn "The call to compilecache failed to create a usable precompiled cache file for $pkg" exception=m
                     end
@@ -1341,9 +1352,9 @@ function compilecache_path(pkg::PkgId)::String
     if pkg.uuid === nothing
         abspath(cachepath, entryfile) * ".ji"
     else
-        crc = _crc32c(something(Base.active_project(), ""))
-        crc = _crc32c(unsafe_string(JLOptions().image_file), crc)
-        crc = _crc32c(unsafe_string(JLOptions().julia_bin), crc)
+        crc = Base._crc32c(something(Base.active_project(), ""))
+        crc = Base._crc32c(unsafe_string(JLOptions().image_file), crc)
+        crc = Base._crc32c(unsafe_string(JLOptions().julia_bin), crc)
         project_precompile_slug = slug(crc, 5)
         abspath(cachepath, string(entryfile, "_", project_precompile_slug, ".ji"))
     end
@@ -1387,7 +1398,7 @@ function compilecache(pkg::PkgId, path::String)
     end
     # run the expression and cache the result
     verbosity = isinteractive() ? CoreLogging.Info : CoreLogging.Debug
-    @logmsg verbosity "Precompiling $pkg"
+    # @logmsg verbosity "Precompiling $pkg"
     p = create_expr_cache(path, cachefile, concrete_deps, pkg.uuid)
     if success(p)
         # append checksum to the end of the .ji file:
@@ -1631,4 +1642,6 @@ macro __DIR__()
     __source__.file === nothing && return nothing
     _dirname = dirname(String(__source__.file::Symbol))
     return isempty(_dirname) ? pwd() : abspath(_dirname)
+end
+
 end
